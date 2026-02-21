@@ -1,0 +1,111 @@
+import hid
+import time
+import sys
+import tty
+import termios
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+from rich.panel import Panel
+
+console = Console()
+
+class MXVertical:
+    def __init__(self, path=b'/dev/hidraw6', dev_index=0x01):
+        self.device = hid.device()
+        try:
+            self.device.open_path(path)
+            self.device.set_nonblocking(True)
+        except Exception:
+            console.print("[red]Error:[/] Could not open device. Check udev rules.")
+            sys.exit(1)
+
+        self.dev_index = dev_index
+        self.DPI_SLOT = 0x13
+        self.BATTERY_SLOT = 0x09
+
+    def get_battery(self):
+        try:
+            # Flush movement data
+            while self.device.read(64): pass
+            
+            # Request battery
+            self.device.write([0x11, self.dev_index, self.BATTERY_SLOT, 0x00] + [0x00]*16)
+            
+            # We give it a moment to respond
+            time.sleep(0.05)
+            res = self.device.read(20)
+            if res and res[0] == 0x11 and res[2] == self.BATTERY_SLOT:
+                level = res[4]
+                status_byte = res[5]
+                status = {0: "Discharging", 1: "Charging", 2: "Full", 3: "Almost Full"}.get(status_byte, "Wait...")
+                return level, status
+        except:
+            pass
+        return 0, "Polling..."
+
+    def set_dpi(self, dpi):
+        dpi = max(400, min(4000, (dpi // 50) * 50))
+        hi, lo = divmod(dpi, 256)
+        msg = [0x11, self.dev_index, self.DPI_SLOT, 0x10, hi, lo] + [0x00]*14
+        self.device.write(msg)
+        return dpi
+
+def getch():
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+def make_dashboard(mouse, current_dpi):
+    batt_pct, status = mouse.get_battery()
+    
+    table = Table(show_header=False, box=None)
+    
+    # Battery Row
+    table.add_row("[bold cyan]Battery[/]", f"{batt_pct}% [dim]({status})[/]")
+    
+    # Progress Bar
+    bar_width = 20
+    filled = int((batt_pct / 100) * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    table.add_row("", f"[{bar}]")
+    
+    # DPI Row
+    table.add_row("[bold green]Sensor DPI[/]", f"[bold reverse] {current_dpi} [/]")
+    
+    return Panel(
+        table,
+        title="[bold white]MX Vertical Manager[/]",
+        subtitle="[yellow]k: Increase | j: Decrease | q: Quit[/]",
+        border_style="blue",
+        padding=(1, 2)
+    )
+
+if __name__ == "__main__":
+    mouse = MXVertical()
+    dpi = 1200
+    mouse.set_dpi(dpi)
+
+    # screen=True prevents the scrolling/newline issue
+    with Live(make_dashboard(mouse, dpi), screen=True, refresh_per_second=10) as live:
+        while True:
+            # We only update the layout when a key is pressed or every loop
+            char = getch().lower()
+            
+            if char == 'q':
+                break
+            elif char == 'k':
+                dpi = min(4000, dpi + 50)
+                mouse.set_dpi(dpi)
+            elif char == 'j':
+                dpi = max(400, dpi - 50)
+                mouse.set_dpi(dpi)
+            
+            live.update(make_dashboard(mouse, dpi))
+
+    console.print("[bold green]Settings applied. Terminal restored.[/]")

@@ -1,41 +1,41 @@
 import hid
 import time
 
-def brute_force_indices():
-    vendor_id = 0x046d
-    product_id = 0xc52b
-    
-    # We'll try common hidraw nodes discovered earlier
-    paths = [b'/dev/hidraw1', b'/dev/hidraw5', b'/dev/hidraw6']
-    
-    for path in paths:
-        try:
-            dev = hid.device()
-            dev.open_path(path)
-            dev.set_nonblocking(True)
-            print(f"\n--- Scanning path: {path} ---")
+def to_hex(data):
+    return " ".join(f"{x:02x}" for x in data)
 
-            # HID++ 2.0 Get Feature Index for Root (0x0000)
-            # We try every index from 0x01 to 0x06 (standard wireless slots)
-            for index in range(1, 7):
-                # Long Report (0x11), Index, Root(0x00), GetFeature(0x00), FeatureSet(0x0001)
-                msg = [0x11, index, 0x00, 0x00, 0x00, 0x01] + [0x00]*14
-                dev.write(msg)
-                time.sleep(0.05)
+def deep_scan():
+    path = b'/dev/hidraw6'
+    dev = hid.device()
+    dev.open_path(path)
+    dev.set_nonblocking(False)
+
+    print("🧬 Mapping MX Vertical Internal DNA...")
+    print(f"{'Slot':<6} | {'Feature':<10} | {'Status':<20}")
+    print("-" * 45)
+
+    for slot in range(1, 0x30): # Scanning up to 48 slots
+        # Query Feature ID for this slot
+        # Feature 0x0001 Function 0x01 = Get Feature ID
+        msg = [0x11, 0x01, 0x01, 0x01, slot] + [0x00]*15
+        dev.write(msg)
+        res = dev.read(20, timeout_ms=50)
+        
+        if res and res[2] != 0xff and len(res) > 5:
+            feature_id = (res[4] << 8) | res[5]
+            
+            # Now, if it's a known sensor feature, try to READ it
+            # 0x2201 = Adjustable DPI
+            # 0x2121 = Hi-Res Reporting
+            status = "ID Found"
+            if feature_id == 0x2201:
+                status = "🎯 TARGET: DPI"
+            elif feature_id == 0x1000:
+                status = "🔋 TARGET: Battery"
                 
-                res = dev.read(20)
-                if res:
-                    print(f"  [!] RESPONSE from Index {hex(index)}: {' '.join(f'{x:02x}' for x in res)}")
-                    # If we see a response starting with 11 [Index] 00 00, we found it!
-                    if res[0] == 0x11 and res[1] == index:
-                        print(f"  🌟 MOUSE IDENTIFIED AT INDEX {hex(index)}!")
-                        return index, path
-            dev.close()
-        except Exception:
-            continue
-    
-    print("\n[-] Still no response. Try switching the mouse channel button on the bottom.")
-    return None, None
+            print(f"0x{slot:02x}   | 0x{feature_id:04x}   | {status}")
+            
+    dev.close()
 
 if __name__ == "__main__":
-    brute_force_indices()
+    deep_scan()
