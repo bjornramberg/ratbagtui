@@ -33,14 +33,24 @@ impl ButtonAction {
     }
 
     pub fn label(&self) -> String {
-        match self {
-            ButtonAction::None => "none".into(),
-            ButtonAction::Button(n) => format!("button {}", n),
-            ButtonAction::Special(n) => format!("special {}", n),
-            ButtonAction::Key(n) => format!("key {}", n),
-            ButtonAction::Unknown => "unknown".into(),
-        }
+    match self {
+        ButtonAction::None => "None".into(),
+        ButtonAction::Button(n) => match n {
+            1 => "Left Click".into(),
+            2 => "Right Click".into(),
+            3 => "Middle Click".into(),
+            4 => "Back".into(),
+            5 => "Forward".into(),
+            6 => "Side Left".into(),
+            7 => "Side Right".into(),
+            8 => "Side Middle".into(),
+            _ => format!("Button {}", n),
+        },
+        ButtonAction::Special(n) => format!("Special {}", n),
+        ButtonAction::Key(n) => format!("Key {}", n),
+        ButtonAction::Unknown => "Unknown".into(),
     }
+}
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +170,39 @@ pub async fn set_dpi(&mut self, conn: &Connection, dpi: u32) -> Result<(), Box<d
 
     device.commit().await?;
     self.dpi = dpi;
+
+    Ok(())
+}
+pub async fn set_button(
+    &mut self,
+    conn: &Connection,
+    button_index: usize,
+    action: ButtonAction,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let btn_path = self.buttons[button_index].path.clone();
+
+    let btn = ButtonProxy::builder(conn)
+        .path(btn_path)?
+        .build()
+        .await?;
+
+    let (action_type, value) = match &action {
+        ButtonAction::None => (0u32, zbus::zvariant::Value::U32(0)),
+        ButtonAction::Button(n) => (1u32, zbus::zvariant::Value::U32(*n)),
+        ButtonAction::Special(n) => (2u32, zbus::zvariant::Value::U32(*n)),
+        ButtonAction::Key(n) => (3u32, zbus::zvariant::Value::U32(*n)),
+        ButtonAction::Unknown => return Ok(()),
+    };
+
+    btn.set_mapping((action_type, value)).await?;
+
+    let device = DeviceProxy::builder(conn)
+        .path(self.device_path.clone())?
+        .build()
+        .await?;
+
+    device.commit().await?;
+    self.buttons[button_index].action = action;
 
     Ok(())
 }
