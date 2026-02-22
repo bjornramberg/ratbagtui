@@ -1,0 +1,5 @@
+# udev rules for libratbag / ratbagtui
+# Grants access to Logitech HID devices for the logged-in user
+# Required because the Arch libratbag package does not ship these rules
+
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"

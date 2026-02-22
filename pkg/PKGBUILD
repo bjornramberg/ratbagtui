@@ -1,0 +1,37 @@
+# Maintainer: Björn Ramberg bjoern.ramberg@gmail.com
+pkgname=ratbagtui
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal UI device manager for configurable mice, built on libratbag"
+arch=('x86_64')
+url="https://github.com/bjornramberg/ratbagtui"
+license=('MIT')
+depends=('libratbag' 'dbus')
+makedepends=('rust' 'cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # Binary
+    install -Dm755 target/release/ratbagtui \
+        "$pkgdir/usr/bin/ratbagtui"
+
+    # udev rules
+    install -Dm644 pkg/70-libratbag.rules \
+        "$pkgdir/usr/lib/udev/rules.d/70-libratbag.rules"
+
+    # License
+    install -Dm644 LICENSE \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+    # README
+    install -Dm644 README.md \
+        "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
