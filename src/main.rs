@@ -244,11 +244,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Enter => {
                     if app.panel == Panel::Dpi {
                         let new_dpi = app.selected_dpi();
-                        // We'll wire up the actual write in the next step
-                        app.device.dpi = new_dpi;
+                        if new_dpi != app.device.dpi {
+                            match app.device.set_dpi(&conn, new_dpi).await {
+                                Ok(_) => {} // header will update on next draw
+                                Err(e) => {
+                                    // we'll add a status bar message later
+                                    eprintln!("Failed to set DPI: {}", e);
+                                }
+                            }
+                        }
                     }
-                }
-
+                }           
                 _ => {}
             }
         }

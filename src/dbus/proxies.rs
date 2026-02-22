@@ -50,7 +50,7 @@ pub trait Resolution {
     fn resolution(&self) -> zbus::Result<OwnedValue>;
 
     #[zbus(property)]
-    fn set_resolution(&self, value: u32) -> zbus::Result<()>;
+    fn set_resolution(&self, value: zbus::zvariant::Value<'_>) -> zbus::Result<()>;
 
     #[zbus(property)]
     fn resolutions(&self) -> zbus::Result<Vec<u32>>;

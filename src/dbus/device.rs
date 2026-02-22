@@ -142,4 +142,25 @@ impl MouseDevice {
 
         Ok(devices)
     }
+
+pub async fn set_dpi(&mut self, conn: &Connection, dpi: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let res = ResolutionProxy::builder(conn)
+        .path(self.resolution_path.clone())?
+        .build()
+        .await?;
+
+    res.set_resolution(
+        zbus::zvariant::Value::Value(Box::new(zbus::zvariant::Value::U32(dpi).try_into().unwrap()))
+    ).await?;
+
+    let device = DeviceProxy::builder(conn)
+        .path(self.device_path.clone())?
+        .build()
+        .await?;
+
+    device.commit().await?;
+    self.dpi = dpi;
+
+    Ok(())
+}
 }
