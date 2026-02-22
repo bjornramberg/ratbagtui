@@ -1,6 +1,6 @@
 # Maintainer: Björn Ramberg https://github.com/bjornramberg
 pkgname=ratbagtui
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Terminal UI device manager for configurable mice, built on libratbag"
 arch=('x86_64')
