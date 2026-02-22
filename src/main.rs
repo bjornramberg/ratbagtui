@@ -1,4 +1,5 @@
 mod dbus;
+mod input;
 
 use dbus::device::{ButtonAction, MouseDevice};
 use zbus::Connection;
@@ -17,6 +18,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use tokio::sync::mpsc;
 
 #[derive(PartialEq)]
 enum Panel {
@@ -28,6 +30,7 @@ enum Panel {
 enum Mode {
     Normal,
     EditingButton,
+    Testing,
 }
 
 struct App {
@@ -36,10 +39,10 @@ struct App {
     mode: Mode,
     dpi_state: ListState,
     button_state: ListState,
-    // Popup state when editing a button
     popup_state: ListState,
     popup_options: Vec<ButtonAction>,
     status: Option<String>,
+    last_input: Option<String>,
 }
 
 impl App {
@@ -68,6 +71,7 @@ impl App {
             popup_state,
             popup_options: Vec::new(),
             status: None,
+            last_input: None,
         }
     }
 
@@ -120,27 +124,27 @@ impl App {
             .unwrap_or(self.device.dpi)
     }
 
-fn open_button_editor(&mut self) {
-    let mut options = vec![ButtonAction::None];
-    for n in 1u32..=8 {
-        options.push(ButtonAction::Button(n));
+    fn open_button_editor(&mut self) {
+        let mut options = vec![ButtonAction::None];
+        for n in 1u32..=8 {
+            options.push(ButtonAction::Button(n));
+        }
+
+        let current = self.button_state.selected().unwrap_or(0);
+        let current_action = &self.device.buttons[current].action;
+        let selected = options
+            .iter()
+            .position(|o| match (o, current_action) {
+                (ButtonAction::None, ButtonAction::None) => true,
+                (ButtonAction::Button(a), ButtonAction::Button(b)) => a == b,
+                _ => false,
+            })
+            .unwrap_or(0);
+
+        self.popup_options = options;
+        self.popup_state.select(Some(selected));
+        self.mode = Mode::EditingButton;
     }
-
-    let current = self.button_state.selected().unwrap_or(0);
-    let current_action = &self.device.buttons[current].action;
-    let selected = options
-        .iter()
-        .position(|o| match (o, current_action) {
-            (ButtonAction::None, ButtonAction::None) => true,
-            (ButtonAction::Button(a), ButtonAction::Button(b)) => a == b,
-            _ => false,
-        })
-        .unwrap_or(0);
-
-    self.popup_options = options;
-    self.popup_state.select(Some(selected));
-    self.mode = Mode::EditingButton;
-}
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -225,11 +229,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .buttons
         .iter()
         .map(|btn| {
-            ListItem::new(format!(
-                "Button {}   {}",
-                btn.index,
-                btn.action.label()
-            ))
+            ListItem::new(format!("Button {}   {}", btn.index, btn.action.label()))
         })
         .collect();
 
@@ -266,6 +266,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
             Span::raw(" navigate  "),
             Span::styled(" Enter ", Style::default().bg(Color::DarkGray)),
             Span::raw(" apply  "),
+            Span::styled(" t ", Style::default().bg(Color::DarkGray)),
+            Span::raw(" test  "),
             Span::styled(" q ", Style::default().bg(Color::DarkGray)),
             Span::raw(" quit"),
         ])
@@ -300,6 +302,58 @@ fn ui(frame: &mut Frame, app: &mut App) {
             .highlight_symbol("▶ ");
         frame.render_stateful_widget(popup_list, popup_area, &mut app.popup_state);
     }
+
+    // Test mode popup
+    if app.mode == Mode::Testing {
+        let popup_area = centered_rect(50, 10, area);
+        frame.render_widget(Clear, popup_area);
+
+        let content = if let Some(ref last) = app.last_input {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Last button pressed:",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    last.as_str(),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press Esc to exit test mode",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Click any mouse button...",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press Esc to exit test mode",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let popup = Paragraph::new(content)
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Green))
+                    .title(" Test Mode ")
+                    .title_alignment(Alignment::Center),
+            );
+        frame.render_widget(popup, popup_area);
+    }
 }
 
 #[tokio::main]
@@ -321,83 +375,111 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let (tx, mut rx) = mpsc::channel::<u16>(32);
+    let input_device = input::find_mouse_device();
+
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if let Event::Key(key) = event::read()? {
-            match app.mode {
-                Mode::Normal => match key.code {
-                    KeyCode::Char('q') => break,
+        // Check for input events from evdev
+        if let Ok(code) = rx.try_recv() {
+        let label = match code {
+            1 => "Left Click".into(),
+            2 => "Right Click".into(),
+            3 => "Middle Click".into(),
+            4 => "Back".into(),
+            5 => "Forward".into(),
+            _ => format!("Button {}", code),
+        };
 
-                    KeyCode::Tab => {
-                        app.panel = if app.panel == Panel::Dpi {
-                            Panel::Buttons
-                        } else {
-                            Panel::Dpi
-                        };
-                        app.status = None;
-                    }
+        let mapped = app
+            .device
+            .buttons
+            .iter()
+            .find(|b| matches!(&b.action, ButtonAction::Button(n) if *n == code as u32))
+            .map(|b| format!("  →  mapped as: {}", b.action.label()))
+            .unwrap_or_default();
 
-                    KeyCode::Down | KeyCode::Char('j') => match app.panel {
-                        Panel::Dpi => app.next_dpi(),
-                        Panel::Buttons => app.next_button(),
-                    },
+        app.last_input = Some(format!("{}{}", label, mapped));
+        }
 
-                    KeyCode::Up | KeyCode::Char('k') => match app.panel {
-                        Panel::Dpi => app.prev_dpi(),
-                        Panel::Buttons => app.prev_button(),
-                    },
+        if event::poll(std::time::Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                match app.mode {
+                    Mode::Normal => match key.code {
+                        KeyCode::Char('q') => break,
 
-                    KeyCode::Enter => match app.panel {
-                        Panel::Dpi => {
-                            let new_dpi = app.selected_dpi();
-                            if new_dpi != app.device.dpi {
-                                match app.device.set_dpi(&conn, new_dpi).await {
-                                    Ok(_) => {
-                                        app.status = Some(format!("DPI set to {}", new_dpi));
-                                    }
-                                    Err(e) => {
-                                        app.status = Some(format!("Error: {}", e));
+                        KeyCode::Char('t') => {
+                            if let Some(ref path) = input_device {
+                                input::start_input_listener(path.clone(), tx.clone() as mpsc::Sender<u16>).await;
+                                app.mode = Mode::Testing;
+                                app.last_input = None;
+                            } else {
+                                app.status = Some("Could not find mouse input device".into());
+                            }
+                        }
+
+                        KeyCode::Tab => {
+                            app.panel = if app.panel == Panel::Dpi {
+                                Panel::Buttons
+                            } else {
+                                Panel::Dpi
+                            };
+                            app.status = None;
+                        }
+
+                        KeyCode::Down | KeyCode::Char('j') => match app.panel {
+                            Panel::Dpi => app.next_dpi(),
+                            Panel::Buttons => app.next_button(),
+                        },
+
+                        KeyCode::Up | KeyCode::Char('k') => match app.panel {
+                            Panel::Dpi => app.prev_dpi(),
+                            Panel::Buttons => app.prev_button(),
+                        },
+
+                        KeyCode::Enter => match app.panel {
+                            Panel::Dpi => {
+                                let new_dpi = app.selected_dpi();
+                                if new_dpi != app.device.dpi {
+                                    match app.device.set_dpi(&conn, new_dpi).await {
+                                        Ok(_) => app.status = Some(format!("DPI set to {}", new_dpi)),
+                                        Err(e) => app.status = Some(format!("Error: {}", e)),
                                     }
                                 }
                             }
-                        }
-                        Panel::Buttons => {
-                            app.open_button_editor();
-                        }
+                            Panel::Buttons => app.open_button_editor(),
+                        },
+
+                        _ => {}
                     },
 
-                    _ => {}
-                },
-
-                Mode::EditingButton => match key.code {
-                    KeyCode::Esc => {
-                        app.mode = Mode::Normal;
-                    }
-
-                    KeyCode::Down | KeyCode::Char('j') => app.next_popup(),
-                    KeyCode::Up | KeyCode::Char('k') => app.prev_popup(),
-
-                    KeyCode::Enter => {
-                        let button_index = app.button_state.selected().unwrap_or(0);
-                        let action_index = app.popup_state.selected().unwrap_or(0);
-                        let action = app.popup_options[action_index].clone();
-                        let label = action.label();
-
-                        match app.device.set_button(&conn, button_index, action).await {
-                            Ok(_) => {
-                                app.status =
-                                    Some(format!("Button {} set to {}", button_index, label));
+                    Mode::EditingButton => match key.code {
+                        KeyCode::Esc => app.mode = Mode::Normal,
+                        KeyCode::Down | KeyCode::Char('j') => app.next_popup(),
+                        KeyCode::Up | KeyCode::Char('k') => app.prev_popup(),
+                        KeyCode::Enter => {
+                            let button_index = app.button_state.selected().unwrap_or(0);
+                            let action_index = app.popup_state.selected().unwrap_or(0);
+                            let action = app.popup_options[action_index].clone();
+                            let label = action.label();
+                            match app.device.set_button(&conn, button_index, action).await {
+                                Ok(_) => app.status = Some(format!("Button {} set to {}", button_index, label)),
+                                Err(e) => app.status = Some(format!("Error: {}", e)),
                             }
-                            Err(e) => {
-                                app.status = Some(format!("Error: {}", e));
-                            }
+                            app.mode = Mode::Normal;
                         }
-                        app.mode = Mode::Normal;
-                    }
+                        _ => {}
+                    },
 
-                    _ => {}
-                },
+                    Mode::Testing => match key.code {
+                        KeyCode::Esc => {
+                            app.mode = Mode::Normal;
+                            app.last_input = None;
+                        }
+                        _ => {}
+                    },
+                }
             }
         }
     }
